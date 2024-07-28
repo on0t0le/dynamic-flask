@@ -1,5 +1,6 @@
 import os
 import pika
+import json
 from flask import Flask
 from multiprocessing import Process
 
@@ -15,18 +16,34 @@ def start_flask_server(port):
 
     app.run(port=port)
 
+def stop_flask_server(port):
+    if port in running_servers:
+        running_servers[port].terminate()
+        running_servers[port].join()
+        del running_servers[port]
+        print(f"Flask server on port {port} stopped")
+
 def callback(ch, method, properties, body):
-    modes = body.decode().split(',')
-    for mode in modes:
-        mode = mode.strip()
-        if mode == "connector 1" and 3001 not in running_servers:
-            p = Process(target=start_flask_server, args=(3001,))
-            p.start()
-            running_servers[3001] = p
-        elif mode == "connector 2" and 3002 not in running_servers:
-            p = Process(target=start_flask_server, args=(3002,))
-            p.start()
-            running_servers[3002] = p
+    try:
+        message = json.loads(body.decode())
+        for connector, status in message.items():
+            port = None
+            if connector == "connector-1":
+                port = 3001
+            elif connector == "connector-2":
+                port = 3002
+
+            if port is not None:
+                if status == "enabled" and port not in running_servers:
+                    p = Process(target=start_flask_server, args=(port,))
+                    p.start()
+                    running_servers[port] = p
+                    print(f"Enabled {connector} on port {port}")
+                elif status == "disabled" and port in running_servers:
+                    stop_flask_server(port)
+                    print(f"Disabled {connector} on port {port}")
+    except json.JSONDecodeError:
+        print("Received message is not a valid JSON")
 
 def listen_to_rabbitmq():
     rabbitmq_host = os.getenv('RABBITMQ_HOST', 'localhost')
