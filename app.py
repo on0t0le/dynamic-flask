@@ -1,8 +1,8 @@
 import os
-import pika
-import json
+import mysql.connector
 from flask import Flask
 from multiprocessing import Process
+import time
 
 # Global dictionary to keep track of running servers
 running_servers = {}
@@ -23,55 +23,45 @@ def stop_flask_server(port):
         del running_servers[port]
         print(f"Flask server on port {port} stopped")
 
-def callback(ch, method, properties, body):
-    try:
-        message = json.loads(body.decode())
-        for connector, status in message.items():
-            port = None
-            if connector == "connector-1":
-                port = 3001
-            elif connector == "connector-2":
-                port = 3002
+def fetch_modes_from_db():
+    db_config = {
+        'user': os.getenv('DB_USER', 'root'),
+        'password': os.getenv('DB_PASSWORD', 'password'),
+        'host': os.getenv('DB_HOST', 'localhost'),
+        'database': os.getenv('DB_NAME', 'test')
+    }
+    conn = mysql.connector.connect(**db_config)
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT mode_name, mode_enabled FROM modes")
+    modes = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return modes
 
-            if port is not None:
-                if status == "enabled" and port not in running_servers:
-                    p = Process(target=start_flask_server, args=(port,))
-                    p.start()
-                    running_servers[port] = p
-                    print(f"Enabled {connector} on port {port}")
-                elif status == "disabled" and port in running_servers:
-                    stop_flask_server(port)
-                    print(f"Disabled {connector} on port {port}")
-    except json.JSONDecodeError:
-        print("Received message is not a valid JSON")
+def update_servers():
+    modes = fetch_modes_from_db()
+    for mode in modes:
+        connector, status = mode['mode_name'], mode['mode_enabled']
+        port = None
+        if connector == "connector-1":
+            port = 3001
+        elif connector == "connector-2":
+            port = 3002
 
-def listen_to_rabbitmq():
-    rabbitmq_host = os.getenv('RABBITMQ_HOST', 'localhost')
-    rabbitmq_port = int(os.getenv('RABBITMQ_PORT', 5672))
-    rabbitmq_queue = os.getenv('RABBITMQ_QUEUE', 'mode_queue')
-    rabbitmq_user = os.getenv('RABBITMQ_USER', 'guest')
-    rabbitmq_password = os.getenv('RABBITMQ_PASSWORD', 'guest')
+        if port is not None:
+            if status == 1 and port not in running_servers:
+                p = Process(target=start_flask_server, args=(port,))
+                p.start()
+                running_servers[port] = p
+                print(f"Enabled {connector} on port {port}")
+            elif status == 0 and port in running_servers:
+                stop_flask_server(port)
+                print(f"Disabled {connector} on port {port}")
 
-    credentials = pika.PlainCredentials(rabbitmq_user, rabbitmq_password)
-    connection = pika.BlockingConnection(
-        pika.ConnectionParameters(
-            host=rabbitmq_host,
-            port=rabbitmq_port,
-            credentials=credentials
-        )
-    )
-    channel = connection.channel()
-
-    channel.queue_declare(queue=rabbitmq_queue)
-
-    channel.basic_consume(
-        queue=rabbitmq_queue,
-        on_message_callback=callback,
-        auto_ack=True
-    )
-
-    print('Waiting for messages. To exit press CTRL+C')
-    channel.start_consuming()
+def main_loop():
+    while True:
+        update_servers()
+        time.sleep(10)  # Check for changes every 10 seconds
 
 if __name__ == "__main__":
-    listen_to_rabbitmq()
+    main_loop()

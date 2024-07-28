@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   redis:
     profiles:
@@ -25,6 +23,25 @@ services:
     ports:
       - 5672:5672
       - 15672:15672
+    networks:
+      - net
+
+  mysql:
+    profiles:
+      - single
+      - cluster
+      - base
+    image: mysql/mysql-server:8.0.32
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_ROOT_HOST: "%"
+      MYSQL_DATABASE: test
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql:/docker-entrypoint-initdb.d
+    ports:
+      - 3306:3306
     networks:
       - net
 
@@ -65,3 +82,6 @@ services:
 
 networks:
   net:
+
+volumes:
+  mysql-data:
